@@ -1,0 +1,31 @@
+#=========================== Filebeat inputs =============================
+
+filebeat.prospectors:
+- type: log
+  enabled: true
+  paths:
+    - <__APPLICATION_LOG_PATH__>
+
+#============================= Filebeat modules ===============================
+
+filebeat.config.modules:
+  # Glob pattern for configuration loading
+  path: ${path.config}/modules.d/*.yml
+
+  # Set to true to enable config reloading
+  reload.enabled: false
+
+  # Period on which files under path should be checked for changes
+  #reload.period: 10s
+
+#----------------------------- Logstash output --------------------------------
+output.logstash:
+  hosts: []
+  loadbalance: true
+  index: filebeat
+  ssl:
+    enabled: true
+    # TODO: Figure out how to include verification with auto-discovery
+    verification_mode: none
+    certificate_authorities:
+      - <__CA_AUTH_PATH__>

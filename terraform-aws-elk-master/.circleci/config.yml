@@ -1,0 +1,97 @@
+defaults: &defaults
+  machine:
+    image: circleci/classic:201711-01
+env: &env
+  environment:
+    GRUNTWORK_INSTALLER_VERSION: v0.0.30
+    TERRATEST_LOG_PARSER_VERSION: v0.38.8
+    MODULE_CI_VERSION: v0.29.0
+    TERRAFORM_VERSION: 1.0.3
+    TERRAGRUNT_VERSION: NONE
+    PACKAGE_ZOOKEEPER_VERSION: v0.6.9
+    PACKER_VERSION: 1.6.1
+    GOLANG_VERSION: 1.16
+    GO111MODULE: auto
+install_gruntwork_utils: &install_gruntwork_utils
+  name: install gruntwork utils
+  command: |
+    curl -Ls https://raw.githubusercontent.com/gruntwork-io/gruntwork-installer/master/bootstrap-gruntwork-installer.sh | bash /dev/stdin --version "${GRUNTWORK_INSTALLER_VERSION}"
+    gruntwork-install --module-name "gruntwork-module-circleci-helpers" --repo "https://github.com/gruntwork-io/terraform-aws-ci" --tag "${MODULE_CI_VERSION}"
+    gruntwork-install --binary-name "terratest_log_parser" --repo "https://github.com/gruntwork-io/terratest" --tag "${TERRATEST_LOG_PARSER_VERSION}"
+    configure-environment-for-gruntwork-module \
+      --terraform-version ${TERRAFORM_VERSION} \
+      --terragrunt-version ${TERRAGRUNT_VERSION} \
+      --packer-version ${PACKER_VERSION} \
+      --go-version ${GOLANG_VERSION}
+version: 2.0
+jobs:
+  precommit:
+    <<: *env
+    docker:
+      - image: circleci/python:3.8.1
+    steps:
+      - checkout
+      # Install gruntwork utilities
+      - run:
+          <<: *install_gruntwork_utils
+
+      # Fail the build if the pre-commit hooks don't pass. Note: if you run pre-commit install locally, these hooks will
+      # execute automatically every time before you commit, ensuring the build never fails at this step!
+      - run:
+          command: |
+            pip install pre-commit==1.21.0 cfgv==2.0.1 zipp==1.1.0 yapf
+            go get golang.org/x/tools/cmd/goimports
+            export GOPATH=~/go/bin && export PATH=$PATH:$GOPATH
+            pre-commit install
+            pre-commit run --all-files
+  test aws:
+    <<: *defaults
+    <<: *env
+    steps:
+      - checkout
+      - run:
+          <<: *install_gruntwork_utils
+      - run:
+          name: install jdk
+          command: |
+            gruntwork-install --module-name 'install-open-jdk' --repo 'https://github.com/gruntwork-io/terraform-aws-zookeeper' --tag ${PACKAGE_ZOOKEEPER_VERSION}
+            # The next line is ncessary because the machine image in CircleCI is misconfigured and keytool is associated
+            # with OpenJDK7 instead of also updating to OpenJDK8
+            sudo update-alternatives --set keytool /usr/lib/jvm/java-8-openjdk-amd64/jre/bin/keytool
+      - run:
+          name: create log directory
+          command: mkdir -p /tmp/logs
+      - run:
+          name: run tests
+          command: run-go-tests --path test --timeout 2h | tee /tmp/logs/all.log
+          # For convenience - comment out the command above and ucomment the command below to run just one test.
+
+          #          command: |
+          #            cd /home/circleci/.go_workspace/src/github.com/gruntwork-io/terraform-aws-elk/test
+          #            go test -v -timeout 180m -run ^TestELKEndToEnd$
+          no_output_timeout: 3600s
+      - run:
+          name: parse test output
+          command: terratest_log_parser --testlog /tmp/logs/all.log --outputdir /tmp/logs
+          when: always
+      - store_artifacts:
+          path: /tmp/logs
+      - store_test_results:
+          path: /tmp/logs
+workflows:
+  version: 2
+  build-and-test:
+    jobs:
+      - precommit:
+          context:
+            - AWS__PHXDEVOPS__circle-ci-test
+            - GITHUB__PAT__gruntwork-ci
+      - test aws:
+          requires:
+            - precommit
+          filters:
+            tags:
+              only: /^v.*/
+          context:
+            - AWS__PHXDEVOPS__circle-ci-test
+            - GITHUB__PAT__gruntwork-ci

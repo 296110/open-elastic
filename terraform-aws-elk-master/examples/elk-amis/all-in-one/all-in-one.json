@@ -1,0 +1,231 @@
+{
+  "min_packer_version": "0.12.0",
+  "variables": {
+    "aws_region": "us-east-1",
+    "instance_type": "t2.micro",
+    "github_auth_token": "{{env `GITHUB_OAUTH_TOKEN`}}",
+    "elasticsearch_version": "6.8.21",
+    "module_elasticsearch_version": "v0.0.1",
+    "module_elasticsearch_branch": "master",
+    "module_filebeat_version": "v0.0.1",
+    "module_filebeat_branch": "master",
+    "module_kibana_version": "",
+    "module_kibana_branch": "master",
+    "module_logstash_version": "v0.0.1",
+    "module_logstash_branch": "master",
+    "module_collectd_version": "v0.0.1",
+    "module_collectd_branch": "master"
+  },
+  "builders": [{
+    "name": "elk-aio-ami-amazon-linux",
+    "ami_name": "gruntwork-amazon-elk-aio-example-{{uuid | clean_resource_name}}",
+    "ami_description": "An Amazon Linux AMI that has all ELK components installed.",
+    "instance_type": "{{user `instance_type`}}",
+    "region": "{{user `aws_region`}}",
+    "type": "amazon-ebs",
+    "source_ami_filter": {
+      "filters": {
+        "virtualization-type": "hvm",
+        "architecture": "x86_64",
+        "name": "amzn2-ami-hvm-*-x86_64-gp2",
+        "block-device-mapping.volume-type": "gp2",
+        "root-device-type": "ebs"
+      },
+      "owners": ["amazon"],
+      "most_recent": true
+    },
+    "ssh_username": "ec2-user"
+  },{
+    "name": "elk-aio-ami-ubuntu-20",
+    "ami_name": "gruntwork-ubuntu-20-elk-aio-example-{{uuid | clean_resource_name}}",
+    "ami_description": "An Ubuntu 20.04 AMI that has all ELK components installed.",
+    "instance_type": "{{user `instance_type`}}",
+    "region": "{{user `aws_region`}}",
+    "type": "amazon-ebs",
+    "source_ami_filter": {
+      "filters": {
+        "virtualization-type": "hvm",
+        "architecture": "x86_64",
+        "name": "ubuntu/images/hvm-ssd/ubuntu-focal-20.04-amd64-server-*",
+        "block-device-mapping.volume-type": "gp2",
+        "root-device-type": "ebs"
+      },
+      "owners": ["099720109477"],
+      "most_recent": true
+    },
+    "ssh_username": "ubuntu"
+  },{
+    "name": "elk-aio-ami-ubuntu-18",
+    "ami_name": "gruntwork-ubuntu-18-elk-aio-example-{{uuid | clean_resource_name}}",
+    "ami_description": "An Ubuntu 18.04 AMI that has all ELK components installed.",
+    "instance_type": "{{user `instance_type`}}",
+    "region": "{{user `aws_region`}}",
+    "type": "amazon-ebs",
+    "source_ami_filter": {
+      "filters": {
+        "virtualization-type": "hvm",
+        "architecture": "x86_64",
+        "name": "ubuntu/images/hvm-ssd/ubuntu-bionic-18.04-amd64-server-*",
+        "block-device-mapping.volume-type": "gp2",
+        "root-device-type": "ebs"
+      },
+      "owners": ["099720109477"],
+      "most_recent": true
+    },
+    "ssh_username": "ubuntu"
+  },{
+    "name": "elk-aio-docker-ubuntu-18",
+    "type": "docker",
+    "image": "gruntwork/ubuntu-test:18.04",
+    "commit": "true"
+  },{
+    "name": "elk-aio-docker-ubuntu",
+    "type": "docker",
+    "image": "gruntwork/ubuntu-test:16.04",
+    "commit": "true"
+  }],
+  "provisioners": [{
+    "type": "shell",
+    "inline": [
+      "# The ubuntu ami image has sudo installed and requires us to use it",
+      "sleep 20",
+      "# Get around issue where automatic ubuntu updates prevent package installation.",
+      "# See https://groups.google.com/d/msg/packer-tool/NTvZP56DRqw/snr8PyoDBwAJ and https://github.com/boxcutter/ubuntu/issues/86",
+      "curl -Ls https://raw.githubusercontent.com/gruntwork-io/bash-commons/v0.1.3/modules/bash-commons/src/dynamic-ubuntu-wait.sh | bash",
+      "sudo DEBIAN_FRONTEND=noninteractive apt-get -y update && sudo DEBIAN_FRONTEND=noninteractive apt-get -y upgrade"
+    ],
+    "only": ["elk-aio-ami-ubuntu-20", "elk-aio-ami-ubuntu-18"]
+  },{
+    "type": "shell",
+    "inline": [
+      "mkdir -p /tmp/config/elasticsearch",
+      "mkdir -p /tmp/config/filebeat",
+      "mkdir -p /tmp/config/logstash",
+      "mkdir -p /tmp/config/kibana",
+      "mkdir -p /tmp/config/collectd"
+    ]
+  },{
+    "type": "file",
+    "source": "{{template_dir}}/../elasticsearch/aws/config",
+    "destination": "/tmp/config/elasticsearch"
+  },{
+    "type": "file",
+    "source": "{{template_dir}}/../filebeat/config",
+    "destination": "/tmp/config/filebeat"
+  },{
+    "type": "file",
+    "source": "{{template_dir}}/../logstash/config",
+    "destination": "/tmp/config/logstash"
+  },{
+    "type": "file",
+    "source": "{{template_dir}}/../kibana/config",
+    "destination": "/tmp/config/kibana"
+  },{
+    "type": "file",
+    "source": "{{template_dir}}/../collectd/config",
+    "destination": "/tmp/config/collectd"
+  },{
+    "type": "shell",
+    "inline": [
+      "curl -Ls https://raw.githubusercontent.com/gruntwork-io/gruntwork-installer/main/bootstrap-gruntwork-installer.sh | bash /dev/stdin --version 'v0.0.21'",
+      "gruntwork-install --module-name 'bash-commons' --repo 'https://github.com/gruntwork-io/bash-commons'  --tag 'v0.0.6'"
+    ],
+    "environment_vars": [
+      "GITHUB_OAUTH_TOKEN={{user `github_auth_token`}}"
+    ]
+  },{
+    "type": "shell",
+    "inline": [
+      "gruntwork-install --module-name 'install-open-jdk' --repo 'https://github.com/gruntwork-io/terraform-aws-zookeeper' --tag 'v0.6.4'"
+    ],
+    "environment_vars": [
+      "GITHUB_OAUTH_TOKEN={{user `github_auth_token`}}"
+    ],
+    "only": [
+        "elk-aio-ami-amazon-linux",
+        "elk-aio-ami-ubuntu-20",
+        "elk-aio-docker-ubuntu"
+    ]
+  },{
+    "type": "shell",
+    "inline": [
+      "gruntwork-install --module-name 'install-open-jdk' --repo 'https://github.com/gruntwork-io/terraform-aws-zookeeper' --tag 'v0.6.4' --module-param 'version=11'"
+    ],
+    "environment_vars": [
+      "GITHUB_OAUTH_TOKEN={{user `github_auth_token`}}"
+    ],
+    "only": [
+        "elk-aio-ami-ubuntu-18",
+        "elk-aio-docker-ubuntu-18"
+    ]
+  },{
+    "type": "shell",
+    "inline": [
+      "gruntwork-install --module-name 'install-elasticsearch' --repo 'https://github.com/gruntwork-io/terraform-aws-elk' --tag '{{user `module_elasticsearch_version`}}' --branch '{{user `module_elasticsearch_branch`}}' --module-param 'version={{user `elasticsearch_version`}}' --module-param 'config-file=/tmp/config/elasticsearch/config/elasticsearch.yml' --module-param 'jvm-config-file=/tmp/config/elasticsearch/config/jvm.options' --module-param 'plugin=discovery-ec2'",
+      "gruntwork-install --module-name 'run-elasticsearch' --repo 'https://github.com/gruntwork-io/terraform-aws-elk' --tag '{{user `module_elasticsearch_version`}}' --branch '{{user `module_elasticsearch_branch`}}'"
+    ],
+    "environment_vars": [
+      "GITHUB_OAUTH_TOKEN={{user `github_auth_token`}}"
+    ]
+  },{
+    "type": "shell",
+    "inline": [
+      "gruntwork-install --module-name 'install-filebeat' --repo 'https://github.com/gruntwork-io/terraform-aws-elk' --tag '{{user `module_filebeat_version`}}' --module-param 'version={{ user `elasticsearch_version` }}' --module-param 'config-file=/tmp/config/filebeat/config/filebeat.yml'",
+      "gruntwork-install --module-name 'run-filebeat' --repo 'https://github.com/gruntwork-io/terraform-aws-elk' --tag '{{user `module_filebeat_version`}}' --branch '{{user `module_filebeat_branch`}}'",
+      "gruntwork-install --module-name 'auto-discovery' --repo 'https://github.com/gruntwork-io/terraform-aws-elk' --tag '{{user `module_filebeat_version`}}' --branch '{{user `module_filebeat_branch`}}'"
+    ],
+    "environment_vars": [
+      "GITHUB_OAUTH_TOKEN={{user `github_auth_token`}}"
+    ]
+  },{
+    "type": "shell",
+    "inline": [
+      "gruntwork-install --module-name 'install-collectd' --repo 'https://github.com/gruntwork-io/terraform-aws-elk' --tag '{{user `module_collectd_version`}}' --branch '{{user `module_collectd_branch`}}' --module-param 'config-file=/tmp/config/collectd/config/collectd.conf' --module-param 'apt-version=5.7.2'",
+      "gruntwork-install --module-name 'run-collectd' --repo 'https://github.com/gruntwork-io/terraform-aws-elk' --tag '{{user `module_collectd_version`}}' --branch '{{user `module_collectd_branch`}}'"
+    ],
+    "environment_vars": [
+      "GITHUB_OAUTH_TOKEN={{user `github_auth_token`}}"
+    ],
+    "only": ["elk-aio-ami-ubuntu-18"]
+  },{
+    "type": "shell",
+    "inline": [
+      "gruntwork-install --module-name 'install-collectd' --repo 'https://github.com/gruntwork-io/terraform-aws-elk' --tag '{{user `module_collectd_version`}}' --branch '{{user `module_collectd_branch`}}' --module-param 'config-file=/tmp/config/collectd/config/collectd.conf'",
+      "gruntwork-install --module-name 'run-collectd' --repo 'https://github.com/gruntwork-io/terraform-aws-elk' --tag '{{user `module_collectd_version`}}' --branch '{{user `module_collectd_branch`}}'"
+    ],
+    "environment_vars": [
+      "GITHUB_OAUTH_TOKEN={{user `github_auth_token`}}"
+    ],
+    "only": ["elk-aio-ami-ubuntu-20", "elk-aio-ami-amazon-linux"]
+  },{
+    "type": "shell",
+    "inline": [
+      "gruntwork-install --module-name 'install-kibana' --repo 'https://github.com/gruntwork-io/terraform-aws-elk' --tag '{{user `module_kibana_version`}}' --branch '{{user `module_kibana_branch`}}' --module-param 'config-file=/tmp/config/kibana/config/kibana.yml'",
+      "gruntwork-install --module-name 'run-kibana' --repo 'https://github.com/gruntwork-io/terraform-aws-elk' --tag '{{user `module_kibana_version`}}' --branch '{{user `module_kibana_branch`}}'"
+    ],
+    "environment_vars": [
+      "GITHUB_OAUTH_TOKEN={{user `github_auth_token`}}"
+    ]
+  },{
+    "type": "shell",
+    "inline": [
+      "gruntwork-install --module-name 'persistent-ebs-volume' --repo 'https://github.com/gruntwork-io/terraform-aws-server' --tag 'v0.7.2'",
+      "gruntwork-install --module-name 'install-logstash' --repo 'https://github.com/gruntwork-io/terraform-aws-elk' --tag '{{user `module_logstash_version`}}' --branch '{{user `module_logstash_branch`}}' --module-param 'version={{user `elasticsearch_version`}}-1' --module-param 'config-file=/tmp/config/logstash/config/logstash.yml' --module-param 'pipeline-config-file=/tmp/config/logstash/config/pipeline.conf' --module-param 'jvm-config-file=/tmp/config/logstash/config/jvm.options' --module-param 'plugin=logstash-input-cloudwatch_logs'",
+      "gruntwork-install --module-name 'run-logstash' --repo 'https://github.com/gruntwork-io/terraform-aws-elk' --tag '{{user `module_logstash_version`}}' --branch '{{user `module_logstash_branch`}}'"
+    ],
+    "environment_vars": [
+      "GITHUB_OAUTH_TOKEN={{user `github_auth_token`}}"
+    ]
+  }],
+  "post-processors": [{
+    "type": "docker-tag",
+    "repository": "gruntwork/elk-aio-ubuntu-18",
+    "tag": "latest",
+    "only": ["elk-aio-docker-ubuntu-18"]
+  },{
+    "type": "docker-tag",
+    "repository": "gruntwork/elk-aio-ubuntu",
+    "tag": "latest",
+    "only": ["elk-aio-docker-ubuntu"]
+  }]
+}

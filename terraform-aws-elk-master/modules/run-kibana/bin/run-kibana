@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+
+set -e
+
+readonly SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly DEFAULT_KIBANA_CONFIG_FILE_PATH="/etc/kibana/kibana.yml"
+readonly DEFAULT_KIBANA_INSTALL_DIR="/usr/share/kibana/"
+
+# Import the appropriate bash commons libraries
+readonly BASH_COMMONS_DIR="/opt/gruntwork/bash-commons"
+
+if [[ ! -d "$BASH_COMMONS_DIR" ]]; then
+  echo "ERROR: this script requires that bash-commons is installed in $BASH_COMMONS_DIR. See https://github.com/gruntwork-io/bash-commons for more info."
+  exit 1
+fi
+
+source "$BASH_COMMONS_DIR/assert.sh"
+source "$BASH_COMMONS_DIR/log.sh"
+source "$BASH_COMMONS_DIR/os.sh"
+source "$BASH_COMMONS_DIR/file.sh"
+
+function print_usage {
+  echo
+  echo "Usage: run-kibana [OPTIONS]"
+  echo
+  echo "This script can be used to configure and run Kibana."
+  echo
+  echo "Optional arguments:"
+  echo
+  echo -e "  --auto-fill KEY=VALUE\t\t\tSearch the Kibana config file for KEY and replace it with VALUE. May be repeated."
+  echo
+  echo "Example:"
+  echo
+  echo "  install.sh \\"
+  echo "    --auto-fill \"<__CLUSTER_NAME__>=the-cluster-name\" \\"
+  echo
+}
+
+function auto_fill_config {
+  local -r config="$1"
+  shift 1
+  local -ar auto_fill=("$@")
+
+  if [[ -z "${auto_fill[@]}" ]]; then
+    log_info "No auto-fill params specified."
+    return
+  fi
+
+  local param
+  for param in "${auto_fill[@]}"; do
+    auto_fill_param "$config" "$param"
+  done
+}
+
+function auto_fill_param {
+  local -r config="$1"
+  local -r param="$2"
+
+  # The param is of the format KEY=VALUE.
+  local -r placeholder_name="$(string_strip_suffix "$param" "=*")"
+  local -r placeholder_value="$(string_strip_prefix "$param" "*=")"
+
+  log_info "Replacing the '$placeholder_name' placeholder in $config with $placeholder_value"
+  file_replace_text "$placeholder_name" "$placeholder_value" "$config"
+}
+
+function start_kibana {
+  log_info "Starting Kibana"
+
+  sudo systemctl enable kibana
+  sudo systemctl start kibana
+}
+
+function process_config_file_template {
+  local -r config_file_template="$1"
+  shift 1
+  local -ar auto_fill=($@)
+
+  log_info "Processing config file from template: $config_file_template"
+
+  auto_fill_config "$config_file_template" "${auto_fill[@]}"
+}
+
+function run {
+  local auto_fill=()
+
+  while [[ $# > 0 ]]; do
+    local key="$1"
+
+    case "$key" in
+      --auto-fill)
+        assert_not_empty "$key" "$2"
+        auto_fill+=("$2")
+        shift
+        ;;
+      --help)
+        print_usage
+        exit
+        ;;
+      *)
+        echo "Unrecognized argument: $key"
+        print_usage
+        exit 1
+        ;;
+    esac
+
+    shift
+  done
+
+  process_config_file_template "$DEFAULT_KIBANA_CONFIG_FILE_PATH" "${auto_fill[@]}"
+
+  start_kibana
+}
+
+run "$@"

@@ -1,0 +1,31 @@
+readonlyrest:
+    enable: true
+    ssl:
+      # put the keystore in the same dir with elasticsearch.yml
+      keystore_file: "<__KEYSTORE_FILE__>"
+      keystore_pass: <__KEYSTORE_PASS__>
+      key_pass: <__KEY_PASS__>
+      key_alias: <__KEY_ALIAS__>
+
+    response_if_req_forbidden: Forbidden by ReadonlyREST ES plugin
+
+    access_control_rules:
+
+    # Configuration for securing logstash. See
+    # https://github.com/beshu-tech/readonlyrest-docs/blob/e56b62f/elasticsearch.md#secure-logstash
+    - name: "::LOGSTASH::"
+      auth_key_sha256: "<__LOGSTASH_PASS_SHA256__>"
+      actions: ["cluster:monitor/main","indices:admin/types/exists","indices:data/read/*","indices:data/write/*","indices:admin/template/*","indices:admin/create"]
+      indices: ["logstash-*", "filebeat-*", "<no-index>"]
+
+    # Configuration for securing kibana. See
+    - name: "::KIBANA::"
+      type: allow
+      auth_key_sha256: "<__KIBANA_PASS_SHA256__>"
+      verbosity: error
+
+    # Configuration for allowing health checks See
+    # https://forum.readonlyrest.com/t/allow-aws-elb-healthcheck-by-user-agent-header/944/11
+    - name: "ELB Check"
+      headers: ["User-Agent:ELB-HealthChecker/2.0"]
+      verbosity: info

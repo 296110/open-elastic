@@ -1,0 +1,228 @@
+#!/usr/bin/env bash
+
+set -e
+
+readonly SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly DEFAULT_ELASTICSEARCH_CONFIG_FILE_PATH="/etc/elasticsearch/elasticsearch.yml"
+readonly DEFAULT_ELASTICSEARCH_JVM_CONFIG_FILE_PATH="/etc/elasticsearch/jvm.options"
+readonly DEFAULT_ELASTICSEARCH_ROR_CONFIG_FILE_PATH="/etc/elasticsearch/readonlyrest.yml"
+
+readonly DEFAULT_MAX_MMAP_COUNT="262144"
+readonly DEFAULT_MAX_THREADS="4096"
+
+
+# Import the appropriate bash commons libraries
+readonly BASH_COMMONS_DIR="/opt/gruntwork/bash-commons"
+
+if [[ ! -d "$BASH_COMMONS_DIR" ]]; then
+  echo "ERROR: this script requires that bash-commons is installed in $BASH_COMMONS_DIR. See https://github.com/gruntwork-io/bash-commons for more info."
+  exit 1
+fi
+
+source "$BASH_COMMONS_DIR/assert.sh"
+source "$BASH_COMMONS_DIR/log.sh"
+source "$BASH_COMMONS_DIR/os.sh"
+source "$BASH_COMMONS_DIR/file.sh"
+
+function print_usage {
+  echo
+  echo "Usage: run-elasticsearch [OPTIONS]"
+  echo
+  echo "This script can be used to configure and run Elasticsearch."
+  echo
+  echo "Optional arguments:"
+  echo
+  echo -e "  --auto-fill-endpoint\t\t\tVALUE should be aws_region. Value will be converted to aws_endpoint. KEY in Elasticsearch config file will be replaced with aws_endpoint. Only needed if running with ec2 discovery plugin."
+  echo -e "  --auto-fill KEY=VALUE\t\t\tSearch the Elasticsearch config file for KEY and replace it with VALUE. May be repeated."
+  echo -e "  --auto-fill-jvm KEY=VALUE\t\t\tSearch the Elasticsearch JVM config file for KEY and replace it with VALUE. May be repeated."
+  echo -e "  --auto-fill-ror KEY=VALUE\t\t\tSearch the Elasticsearch ReadonlyREST config file for KEY and replace it with VALUE. May be repeated. Only if using ReadonlyREST plugin for SSL."
+  echo
+  echo "Example:"
+  echo
+  echo "  install.sh \\"
+  echo "    --auto-fill \"<__CLUSTER_NAME__>=the-cluster-name\" --auto-fill-jvm \"<__XMS__>=4g\"\\"
+  echo
+}
+
+function auto_fill_config {
+  local -r config="$1"
+  shift 1
+  local -ar auto_fill=($@)
+
+  if [[ -z "${auto_fill[@]}" ]]; then
+    log_info "No auto-fill params specified."
+    return
+  fi
+
+  local param
+  for param in "${auto_fill[@]}"; do
+    auto_fill_param "$config" "$param"
+  done
+}
+
+function auto_fill_param {
+  local -r config="$1"
+  local -r param="$2"
+
+  # The param is of the format KEY=VALUE.
+  local -r placeholder_name="$(string_strip_suffix "$param" "=*")"
+  local -r placeholder_value="$(string_strip_prefix "$param" "*=")"
+
+  log_info "Replacing the '$placeholder_name' placeholder in $config with $placeholder_value"
+  file_replace_text "$placeholder_name" "$placeholder_value" "$config"
+}
+
+function start_elasticsearch {
+  log_info "Starting Elasticsearch"
+
+  sudo systemctl enable elasticsearch
+  sudo systemctl start elasticsearch
+}
+
+function process_config_file_template {
+  local -r config_file_template="$1"
+  shift 1
+  local -ar auto_fill=($@)
+
+  log_info "Processing config file from template: $config_file_template"
+
+  auto_fill_config "$config_file_template" "${auto_fill[@]}"
+}
+
+function aws_endpoint_from_region {
+  local -r aws_region="$1"
+
+  case "$aws_region" in
+    us-east-2)
+      aws_endpoint="ec2.us-east-2.amazonaws.com"
+    ;;
+    us-east-1)
+      aws_endpoint="ec2.us-east-1.amazonaws.com"
+    ;;
+    us-west-1)
+      aws_endpoint="ec2.us-west-1.amazonaws.com"
+    ;;
+    us-west-2)
+      aws_endpoint="ec2.us-west-2.amazonaws.com"
+    ;;
+    ap-northeast-1)
+      aws_endpoint="ec2.ap-northeast-1.amazonaws.com"
+    ;;
+    ap-northeast-2)
+      aws_endpoint="ec2.ap-northeast-2.amazonaws.com"
+    ;;
+    ap-northeast-3)
+      aws_endpoint="ec2.ap-northeast-3.amazonaws.com"
+    ;;
+    ap-south-1)
+      aws_endpoint="ec2.ap-south-1.amazonaws.com"
+    ;;
+    ap-southeast-1)
+      aws_endpoint="ec2.ap-southeast-1.amazonaws.com"
+    ;;
+    ap-southeast-2)
+      aws_endpoint="ec2.ap-southeast-2.amazonaws.com"
+    ;;
+    ca-central-1)
+      aws_endpoint="ec2.ca-central-1.amazonaws.com"
+    ;;
+    cn-north-1)
+      aws_endpoint="ec2.cn-north-1.amazonaws.com.cn"
+    ;;
+    cn-northwest-1)
+      aws_endpoint="ec2.cn-northwest-1.amazonaws.com.cn"
+    ;;
+    eu-central-1)
+      aws_endpoint="ec2.eu-central-1.amazonaws.com"
+    ;;
+    eu-west-1)
+      aws_endpoint="ec2.eu-west-1.amazonaws.com"
+    ;;
+    eu-west-2)
+      aws_endpoint="ec2.eu-west-2.amazonaws.com"
+    ;;
+    eu-west-3)
+      aws_endpoint="ec2.eu-west-3.amazonaws.com"
+    ;;
+    sa-east-1)
+      aws_endpoint="ec2.sa-east-1.amazonaws.com"
+    ;;
+    us-gov-west-1)
+      aws_endpoint="ec2.us-gov-west-1.amazonaws.com"
+    ;;
+    *)
+      echo "Unrecognized aws_region: $aws_region"
+      exit 1
+    ;;
+  esac
+
+  echo "$aws_endpoint"
+}
+
+function run {
+  local auto_fill=()
+  local auto_fill_jvm=()
+  local auto_fill_ror=()
+
+  while [[ $# > 0 ]]; do
+    local key="$1"
+
+    case "$key" in
+      --auto-fill-endpoint)
+        assert_not_empty "$key" "$2"
+        param="$2"
+        # Need to specify endpoint for the ec2 autodiscoery plugin
+        # due to this issue: https://github.com/elastic/elasticsearch/issues/27464
+        # We are staring with KEY=AWS_REGION but need KEY=AWS_ENDPOINT
+
+        # So we break down the pair into key and value.
+        local -r placeholder_key="$(string_strip_suffix "$param" "=*")"
+        local -r placeholder_region_value="$(string_strip_prefix "$param" "*=")"
+
+        # We can now convery the aws_region into aws_endpoint
+        endpoint=$(aws_endpoint_from_region "$placeholder_region_value")
+
+        # Now, reassemble into key=value and feed it through the same mechanism as
+        # all the other config template replacements.
+        auto_fill+=("$placeholder_key=$endpoint")
+        shift
+        ;;
+      --auto-fill)
+        assert_not_empty "$key" "$2"
+        auto_fill+=("$2")
+        shift
+        ;;
+      --auto-fill-jvm)
+        assert_not_empty "$key" "$2"
+        auto_fill_jvm+=("$2")
+        shift
+        ;;
+      --auto-fill-ror)
+        assert_not_empty "$key" "$2"
+        auto_fill_ror+=("$2")
+        shift
+        ;;
+      --help)
+        print_usage
+        exit
+        ;;
+      *)
+        echo "Unrecognized argument: $key"
+        print_usage
+        exit 1
+        ;;
+    esac
+
+    shift
+  done
+
+  process_config_file_template "$DEFAULT_ELASTICSEARCH_CONFIG_FILE_PATH" "${auto_fill[@]}"
+
+  process_config_file_template "$DEFAULT_ELASTICSEARCH_JVM_CONFIG_FILE_PATH" "${auto_fill_jvm[@]}"
+
+  process_config_file_template "$DEFAULT_ELASTICSEARCH_ROR_CONFIG_FILE_PATH" "${auto_fill_ror[@]}"
+
+  start_elasticsearch
+}
+
+run "$@"

@@ -1,0 +1,198 @@
+#!/usr/bin/env bash
+
+set -e
+
+readonly SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Import the appropriate bash commons libraries
+readonly BASH_COMMONS_DIR="/opt/gruntwork/bash-commons"
+readonly DEFAULT_USE_PUBLIC_IPS="true"
+readonly DEFAULT_CRON_USER="$(whoami)"
+
+if [[ ! -d "$BASH_COMMONS_DIR" ]]; then
+  echo "ERROR: this script requires that bash-commons is installed in $BASH_COMMONS_DIR. See https://github.com/gruntwork-io/bash-commons for more info."
+  exit 1
+fi
+
+source "$BASH_COMMONS_DIR/array.sh"
+source "$BASH_COMMONS_DIR/assert.sh"
+source "$BASH_COMMONS_DIR/aws-wrapper.sh"
+source "$BASH_COMMONS_DIR/file.sh"
+source "$BASH_COMMONS_DIR/log.sh"
+source "$BASH_COMMONS_DIR/string.sh"
+
+function print_usage {
+  echo
+  echo "Usage: auto-discovery [options]"
+  echo
+  echo "This script can run on a scheduled basis to (a) automatically discover the IPs of other EC2 Instances (b) write these IPs to a config file, (c) restart the service using that config file."
+  echo
+  echo "Options:"
+  echo
+  echo -e "  --tag\t\t\t\t\tThe tag key and value, separated by an equals sign, on the instances. E.g: --tag 'Name=instance-0'"
+  echo -e "  --port\t\t\t\tThe port on which the server nodes listen on for connections."
+  echo -e "  --aws-region\t\t\t\tThe AWS region where the instances are deployed."
+  echo -e "  --use-public-ips\t\t\tSet to true to use public IPs and false to use private IPs. Default: $DEFAULT_USE_PUBLIC_IPS"
+  echo -e "  --config-file\t\t\t\tThe path to the configuration file this script will update with newly found instances."
+  echo -e "  --service-name\t\t\tThe name of the systemd service to restart after updating the specified configuration file."
+  echo -e "  --pattern\t\t\t\tRegex pattern used to identify where to update in the specified configuration file."
+  echo -e "  --schedule\t\t\t\tA cron expression specifying the schedule this script will run with otherwise script will run only once."
+  echo -e "  --user\t\t\t\tThe user to schedule the cron job for. Defaults to the user that executes the script"
+  echo -e "  --help\t\t\t\tShow this help text and exit."
+  echo
+  echo "Example:"
+  echo
+  echo "  auto-discovery --tag 'Name=instance-0' --port 5044 --aws-region 'us-east-1' --config-file ./filebeat.yml --pattern 'hosts:.*' --service-name 'filebeat'"
+}
+
+function schedule_self {
+  local -r user="$1"
+  shift 1
+
+  sudo su - "$user"
+
+  log_info "Scheduling self as CRON job for user: $user"
+  echo "$schedule $SCRIPT_PATH/auto-discovery $@" | crontab
+}
+
+function update_config_file {
+  local -r tag="$1"
+  local -r port="$2"
+  local -r aws_region="$3"
+  local -r use_public_ips="$4"
+  local -r config_file="$5"
+  local -r pattern="$6"
+  local -a hosts=()
+
+  local -r tag_key="$(string_strip_suffix "$tag" "=*")"
+  local -r tag_value="$(string_strip_prefix "$tag" "*=")"
+
+  log_info "Retrieving IPs with tag '$tag_key' set to '$tag_value'"
+  local ips
+  ips=($(aws_wrapper_get_ips_with_tag "$tag_key" "$tag_value" "$aws_region" "$use_public_ips"))
+
+  if [[ "${#ips[@]}" -lt 1 ]]; then
+    log_error "Request didn't return any instance IPs"
+    exit 1
+  fi
+
+  for ip in "${ips[@]}"
+  do
+    hosts+=("\"$ip:$port\"")
+  done
+
+  hosts="[$(array_join ", " "${hosts[@]}")]"
+
+  log_info "Updating configuration file: $config_file"
+  file_replace_text "$pattern" "hosts: $hosts" "$config_file"
+}
+
+function restart_service {
+  local -r service="$1"
+  log_info "Restarting $service"
+  sudo service "$service" restart
+  log_info "Complete!"
+}
+
+function run {
+  local args="$@"
+  local use_public_ips="$DEFAULT_USE_PUBLIC_IPS"
+  local user="$DEFAULT_CRON_USER"
+  local tag=""
+  local aws_region=""
+  local port=""
+  local config_file=""
+  local pattern=""
+  local service_name=""
+  local schedule=""
+
+  while [[ $# > 0 ]]; do
+    local key="$1"
+
+    case "$key" in
+      --tag)
+        assert_not_empty "$key" "$2"
+        tag="$2"
+        shift
+        ;;
+      --port)
+        assert_not_empty "$key" "$2"
+        port="$2"
+        shift
+        ;;
+      --aws-region)
+        assert_not_empty "$key" "$2"
+        aws_region="$2"
+        shift
+        ;;
+      --use-public-ips)
+        assert_not_empty "$key" "$2"
+        use_public_ips="$2"
+        shift
+        ;;
+      --config-file)
+        assert_not_empty "$key" "$2"
+        config_file="$2"
+        shift
+        ;;
+      --pattern)
+        assert_not_empty "$key" "$2"
+        pattern="$2"
+        shift
+        ;;
+      --service-name)
+        assert_not_empty "$key" "$2"
+        service_name="$2"
+        shift
+        ;;
+      --schedule)
+        assert_not_empty "$key" "$2"
+        schedule="$2"
+        shift
+        ;;
+      --user)
+        assert_not_empty "$key" "$2"
+        user="$2"
+        shift
+        ;;
+      --help)
+        print_usage
+        exit
+        ;;
+      *)
+        echo "Unrecognized argument: $key"
+        print_usage
+        exit 1
+        ;;
+    esac
+
+    shift
+  done
+
+  assert_not_empty "--tag" "$tag"
+  assert_not_empty "--port" "$port"
+  assert_not_empty "--aws-region" "$aws_region"
+  assert_not_empty "--use-public-ips" "$use_public_ips"
+  assert_not_empty "--config-file" "$config_file"
+  assert_not_empty "--pattern" "$pattern"
+  assert_not_empty "--service-name" "$service_name"
+  assert_not_empty "--user" "$user"
+
+  # Ensure --use-public-ips is either "true" or "false"
+  assert_value_in_list "--use-public-ips" "$use_public_ips" "true" "false"
+
+  update_config_file "$tag" "$port" "$aws_region" "$use_public_ips" "$config_file" "$pattern"
+  restart_service "$service_name"
+
+  if ! string_is_empty_or_null "$schedule"; then
+    # Strip out schedule argument so we don't create a cron job that keeps re-scheduling itself
+    args="${args/--schedule $schedule/}"
+
+    # Strip out unneeded user argument
+    args="${args/--user $user/}"
+
+    schedule_self "$user" "$args"
+  fi
+}
+
+run "$@"

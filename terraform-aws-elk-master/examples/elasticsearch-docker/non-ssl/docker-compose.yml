@@ -1,0 +1,42 @@
+version: '3'
+services:
+  elasticsearch-0: &elasticsearch_config
+    image: gruntwork/${CONTAINER_BASE_NAME}-${OS_NAME}
+    container_name: ${CONTAINER_BASE_NAME}-${OS_NAME}-0
+    ports:
+      - ${ELASTICSEARCH_PORT}:9200
+      - ${ELASTICSEARCH_DISCOVERY_PORT}:9300
+    entrypoint: ["/entrypoint/entrypoint.sh"]
+
+    # Required to make systemd happy
+    privileged: true
+
+    volumes:
+      # Used for systemd
+      - /sys/fs/cgroup:/sys/fs/cgroup:ro
+
+      # Mount these scripts so we get hot reload
+      - ../../../modules/run-elasticsearch/bin/run-elasticsearch:/usr/share/elasticsearch/bin/run-elasticsearch
+
+      # Mount the scripts we use to run Elasticsearch during Docker container boot
+      - ./user-data:/user-data
+      - ../local-mocks/entrypoint.sh:/entrypoint/entrypoint.sh
+
+    environment:
+      # The User Data script that will be executed on boot by entrypoint.sh
+      USER_DATA_SCRIPT: /user-data/user-data.sh
+      # Any environment variable starting with USER_DATA_ENV_ will be read in by entrypoint.sh and made available in
+      # the User Data script, with the USER_DATA_ENV_ portion stripped off.
+      USER_DATA_ENV_cluster_name: mock-elasticsearch-server
+      USER_DATA_ENV_network_host: 0.0.0.0
+      USER_DATA_ENV_jvm_xms: 512m
+      USER_DATA_ENV_jvm_xmx: 512m
+      USER_DATA_ENV_ping_unicast_hosts: "[\"elasticsearch-0\",\"elasticsearch-1\"]"
+      USER_DATA_ENV_min_master_nodes: 2
+
+  elasticsearch-1:
+    <<: *elasticsearch_config
+    container_name: ${CONTAINER_BASE_NAME}-${OS_NAME}-1
+    ports:
+      - "9200"
+      - "9300"

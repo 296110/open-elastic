@@ -1,0 +1,206 @@
+#!/usr/bin/env bash
+
+set -e
+
+readonly SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly DEFAULT_FILEBEAT_CONFIG_FILE_PATH="/etc/filebeat/filebeat.yml"
+readonly DEFAULT_SKIP_AUTO_DISCOVERY="false"
+
+readonly DEFAULT_AWS_REGION="us-east-1"
+readonly DEFAULT_USE_PUBLIC_IPS="true"
+readonly DEFAULT_BEATS_PORT="5044"
+readonly DEFAULT_CRON_SCHEDULE="*/5 * * * *"
+
+
+# Import the appropriate bash commons libraries
+readonly BASH_COMMONS_DIR="/opt/gruntwork/bash-commons"
+
+if [[ ! -d "$BASH_COMMONS_DIR" ]]; then
+  echo "ERROR: this script requires that bash-commons is installed in $BASH_COMMONS_DIR. See https://github.com/gruntwork-io/bash-commons for more info."
+  exit 1
+fi
+
+source "$BASH_COMMONS_DIR/assert.sh"
+source "$BASH_COMMONS_DIR/log.sh"
+source "$BASH_COMMONS_DIR/os.sh"
+source "$BASH_COMMONS_DIR/file.sh"
+
+function print_usage {
+  echo
+  echo "Usage: run-filebeat [options]"
+  echo
+  echo "This script can be used to configure and run Filebeat. This script has been tested with Ubuntu 20.04 + 18.04, CentOS 7 and Amazon Linux 2."
+  echo
+  echo "Options:"
+  echo
+  echo -e "  --config-file\t\t\t\tThe path to a YAML config file for Filebeat. Default: $DEFAULT_FILEBEAT_CONFIG_FILE_PATH."
+  echo -e "  --skip-auto-discovery\t\t\tSpecifies whether this script should skip checking for Logstash nodes. Default: $DEFAULT_SKIP_AUTO_DISCOVERY."
+  echo -e "  --auto-fill KEY=VALUE\t\t\tSearch the Filebeat config file for KEY and replace it with VALUE. May be repeated."
+  echo -e "  --help\t\t\t\tShow this help text and exit."
+  echo
+  echo "Required arguments only if auto discovery is enabled"
+  echo
+  echo -e "  --tag\t\t\t\t\tThe tag key and value on the instances."
+  echo -e "  --port\t\t\t\tThe port on which the Logstash nodes listen for beats connections. Default: $DEFAULT_BEATS_PORT"
+  echo -e "  --aws-region\t\t\t\tThe AWS region where the ASG is deployed. Default: $DEFAULT_AWS_REGION"
+  echo -e "  --use-public-ips\t\t\tSets whether to get the public or private IPs from the ASG. Default: $DEFAULT_USE_PUBLIC_IPS"
+  echo -e "  --schedule\t\t\t\tA cron expression specifying the schedule this script will run with. Default: $DEFAULT_CRON_SCHEDULE"
+  echo
+  echo
+  echo "Example:"
+  echo
+  echo "  run-filebeat --auto-fill '<__PATH__>=/var/log/*.log'"
+}
+
+function auto_discover {
+  local -r tag="$1"
+  local -r port="$2"
+  local -r aws_region="$3"
+  local -r use_public_ips="$4"
+  local -r config_file="$5"
+  local -r schedule="$6"
+  local -a args=()
+
+  args+=("--tag" "$tag")
+  args+=("--port" "$port")
+  args+=("--aws-region" "$aws_region")
+  args+=("--use-public-ips" "$use_public_ips")
+  args+=("--config-file" "$config_file")
+  args+=("--pattern" "hosts:.*")
+  args+=("--service-name" "filebeat")
+  args+=("--schedule" "$schedule")
+
+  auto-discovery "${args[@]}"
+}
+
+function auto_fill_config {
+  local -r config="$1"
+  shift 1
+  local -ar auto_fill=("$@")
+
+  if [[ -z "${auto_fill[@]}" ]]; then
+    log_info "No auto-fill params specified."
+    return
+  fi
+
+  local param
+  for param in "${auto_fill[@]}"; do
+    auto_fill_param "$config" "$param"
+  done
+}
+
+function auto_fill_param {
+  local -r config="$1"
+  local -r param="$2"
+
+  # The param is of the format KEY=VALUE.
+  local -r placeholder_name="$(string_strip_suffix "$param" "=*")"
+  local -r placeholder_value="$(string_strip_prefix "$param" "*=")"
+
+  log_info "Replacing the '$placeholder_name' placeholder in $config with $placeholder_value"
+  file_replace_text "$placeholder_name" "$placeholder_value" "$config"
+}
+
+function start_filebeat {
+  log_info "Starting Filebeat"
+
+  sudo systemctl enable filebeat
+  sudo systemctl restart filebeat
+}
+
+function run {
+    local auto_fill=()
+    local config_file="$DEFAULT_FILEBEAT_CONFIG_FILE_PATH"
+
+    local skip_auto_discovery="$DEFAULT_SKIP_AUTO_DISCOVERY"
+    local port="$DEFAULT_BEATS_PORT"
+    local aws_region="$DEFAULT_AWS_REGION"
+    local use_public_ips="$DEFAULT_USE_PUBLIC_IPS"
+    local schedule="$DEFAULT_CRON_SCHEDULE"
+    local tag=""
+
+    while [[ $# > 0 ]]; do
+        local key="$1"
+
+        case "$key" in
+          --auto-fill)
+            assert_not_empty "$key" "$2"
+            auto_fill+=("$2")
+            shift
+            ;;
+          --config-file)
+            assert_not_empty "$key" "$2"
+            config_file="$2"
+            shift
+            ;;
+          --skip-auto-discovery)
+            assert_not_empty "$key" "$2"
+            skip_auto_discovery="$2"
+            shift
+            ;;
+          --tag)
+            assert_not_empty "$key" "$2"
+            tag="$2"
+            shift
+            ;;
+          --port)
+            assert_not_empty "$key" "$2"
+            port="$2"
+            shift
+            ;;
+          --aws-region)
+            assert_not_empty "$key" "$2"
+            aws_region="$2"
+            shift
+            ;;
+          --use-public-ips)
+            assert_not_empty "$key" "$2"
+            use_public_ips="$2"
+            shift
+            ;;
+          --schedule)
+            assert_not_empty "$key" "$2"
+            schedule="$2"
+            shift
+            ;;
+          --help)
+            print_usage
+            exit
+            ;;
+          *)
+            echo "Unrecognized argument: $key"
+            print_usage
+            exit 1
+            ;;
+        esac
+
+        shift
+    done
+
+    assert_not_empty "--skip-auto-discovery" "$skip_auto_discovery"
+    assert_not_empty "--config-file" "$config_file"
+    auto_fill_config "$config_file" "${auto_fill[@]}"
+
+    # Ensure --skip-auto-discovery is either "true" or "false"
+    assert_value_in_list "--skip-auto-discovery" "$skip_auto_discovery" "true" "false"
+
+    if [[ $skip_auto_discovery == "false" ]]; then
+      assert_not_empty "--tag" "$tag"
+      assert_not_empty "--port" "$port"
+      assert_not_empty "--aws-region" "$aws_region"
+      assert_not_empty "--use-public-ips" "$use_public_ips"
+      assert_not_empty "--config-file" "$config_file"
+      assert_not_empty "--schedule" "$schedule"
+
+      # Ensure --use-public-ips is either "true" or "false"
+      assert_value_in_list "--use-public-ips" "$use_public_ips" "true" "false"
+    fi
+
+    # Do autodiscovery before starting filebeat so that the config is updated with proper logstash endpoints.
+    if [[ $skip_auto_discovery == "false" ]]; then
+      auto_discover "$tag" "$port" "$aws_region" "$use_public_ips" "$config_file" "$schedule"
+    fi
+    start_filebeat
+}
+
+run "$@"

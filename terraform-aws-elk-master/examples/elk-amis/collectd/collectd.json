@@ -1,0 +1,210 @@
+{
+  "min_packer_version": "0.12.0",
+  "variables": {
+    "aws_region": "us-east-1",
+    "instance_type": "t2.micro",
+    "github_auth_token": "{{env `GITHUB_OAUTH_TOKEN`}}",
+    "module_collectd_version": "v0.0.1",
+    "module_collectd_branch": "master",
+    "use_ssl": "false"
+  },
+  "builders": [{
+    "name": "collectd-ami-amazon-linux",
+    "ami_name": "gruntwork-amazon-collectd-example-{{uuid | clean_resource_name}}",
+    "ami_description": "An Amazon Linux 2 AMI that has collectd installed.",
+    "instance_type": "{{user `instance_type`}}",
+    "region": "{{user `aws_region`}}",
+    "type": "amazon-ebs",
+    "source_ami_filter": {
+      "filters": {
+        "virtualization-type": "hvm",
+        "architecture": "x86_64",
+        "name": "amzn2-ami-hvm-*-x86_64-gp2",
+        "block-device-mapping.volume-type": "gp2",
+        "root-device-type": "ebs"
+      },
+      "owners": [
+        "amazon"
+      ],
+      "most_recent": true
+    },
+    "ssh_username": "ec2-user"
+  },{
+    "name": "collectd-ami-ubuntu-20",
+    "ami_name": "gruntwork-ubuntu-20-collectd-example-{{uuid | clean_resource_name}}",
+    "ami_description": "An Ubuntu 20.04 AMI that has collectd installed.",
+    "instance_type": "{{user `instance_type`}}",
+    "region": "{{user `aws_region`}}",
+    "type": "amazon-ebs",
+    "source_ami_filter": {
+      "filters": {
+        "virtualization-type": "hvm",
+        "architecture": "x86_64",
+        "name": "*ubuntu-xenial-20.04-amd64-server-*",
+        "block-device-mapping.volume-type": "gp2",
+        "root-device-type": "ebs"
+      },
+      "owners": [
+        "099720109477"
+      ],
+      "most_recent": true
+    },
+    "ssh_username": "ubuntu"
+  },{
+    "name": "collectd-ami-ubuntu-18",
+    "ami_name": "gruntwork-ubuntu-18-collectd-example-{{uuid | clean_resource_name}}",
+    "ami_description": "An Ubuntu 18.04 AMI that has collectd installed.",
+    "instance_type": "{{user `instance_type`}}",
+    "region": "{{user `aws_region`}}",
+    "type": "amazon-ebs",
+    "source_ami_filter": {
+      "filters": {
+        "virtualization-type": "hvm",
+        "architecture": "x86_64",
+        "name": "ubuntu/images/hvm-ssd/ubuntu-bionic-18.04-amd64-server-*",
+        "block-device-mapping.volume-type": "gp2",
+        "root-device-type": "ebs"
+      },
+      "owners": [
+        "099720109477"
+      ],
+      "most_recent": true
+    },
+    "ssh_username": "ubuntu"
+  },{
+    "name": "collectd-ami-centos",
+    "ami_name": "gruntwork-centos-collectd-example-{{uuid | clean_resource_name}}",
+    "ami_description": "A CentOS 7 AMI that has collectd installed.",
+    "instance_type": "{{user `instance_type`}}",
+    "region": "{{user `aws_region`}}",
+    "type": "amazon-ebs",
+    "source_ami_filter": {
+      "filters": {
+        "virtualization-type": "hvm",
+        "architecture": "x86_64",
+        "name": "*CentOS Linux 7 x86_64 HVM EBS*",
+        "root-device-type": "ebs"
+      },
+      "owners": [
+        "679593333241"
+      ],
+      "most_recent": true
+    },
+    "ssh_username": "centos"
+  },{
+    "name": "collectd-docker-amazon-linux",
+    "type": "docker",
+    "image": "gruntwork/amazon-linux-test:2017.12",
+    "commit": "true"
+  },{
+    "name": "collectd-docker-ubuntu",
+    "type": "docker",
+    "image": "gruntwork/ubuntu-test:16.04",
+    "commit": "true"
+  },{
+    "name": "collectd-docker-centos",
+    "type": "docker",
+    "image": "gruntwork/centos-test:latest",
+    "commit": "true"
+  }],
+  "provisioners": [{
+    "type": "file",
+    "source": "{{template_dir}}/collectd-install-steps.sh",
+    "destination": "/tmp/collectd-install-steps.sh"
+  },{
+    "type": "file",
+    "source": "{{template_dir}}/config",
+    "destination": "/tmp"
+  },{
+    "type": "file",
+    "source": "{{template_dir}}/../ssl",
+    "destination": "/tmp"
+  },{
+    "type": "shell",
+    "inline": [
+      "sudo yum update -y",
+      "sudo yum install -y wget"
+    ],
+    "only": [
+      "collectd-ami-centos"
+    ]
+  },{
+    "type": "shell",
+    "inline": [
+      "sudo yum update -y",
+      "sudo yum install -y polkit"
+    ],
+    "only": [
+      "collectd-ami-amazon-linux",
+      "collectd-docker-amazon-linux"
+    ]
+  },{
+    "type": "shell",
+    "inline": [
+      "sudo yum remove -y epel*"
+    ],
+    "only": [
+      "collectd-docker-centos"
+    ]
+  },{
+    "type": "shell",
+    "inline": [
+      "curl -Ls https://raw.githubusercontent.com/gruntwork-io/gruntwork-installer/main/bootstrap-gruntwork-installer.sh | bash /dev/stdin --version 'v0.0.21'",
+      "gruntwork-install --module-name 'bash-commons' --repo 'https://github.com/gruntwork-io/bash-commons'  --tag 'v0.0.6'",
+      "/tmp/collectd-install-steps.sh {{user `use_ssl`}} {{user `module_collectd_version`}} {{user `module_collectd_branch`}} '/tmp/config'",
+      "gruntwork-install --module-name 'run-collectd' --repo 'https://github.com/gruntwork-io/terraform-aws-elk' --tag '{{user `module_collectd_version`}}' --branch '{{user `module_collectd_branch`}}'"
+    ],
+    "environment_vars": [
+      "GITHUB_OAUTH_TOKEN={{user `github_auth_token`}}"
+    ],
+    "only": [
+        "collectd-docker-amazon-linux",
+        "collectd-docker-ubuntu",
+        "collectd-docker-centos",
+        "collectd-ami-amazon-linux",
+        "collectd-ami-ubuntu-20",
+        "collectd-ami-centos"
+    ]
+  },{
+    "type": "shell",
+    "inline": [
+      "curl -Ls https://raw.githubusercontent.com/gruntwork-io/gruntwork-installer/main/bootstrap-gruntwork-installer.sh | bash /dev/stdin --version 'v0.0.21'",
+      "gruntwork-install --module-name 'bash-commons' --repo 'https://github.com/gruntwork-io/bash-commons'  --tag 'v0.0.6'",
+      "/tmp/collectd-install-steps.sh {{user `use_ssl`}} {{user `module_collectd_version`}} {{user `module_collectd_branch`}} '/tmp/config' --module-param 'apt-version=5.7.2'",
+      "gruntwork-install --module-name 'run-collectd' --repo 'https://github.com/gruntwork-io/terraform-aws-elk' --tag '{{user `module_collectd_version`}}' --branch '{{user `module_collectd_branch`}}'"
+    ],
+    "environment_vars": [
+      "GITHUB_OAUTH_TOKEN={{user `github_auth_token`}}"
+    ],
+    "only": ["collectd-ami-ubuntu-18"]
+  }],
+  "post-processors": [{
+    "type": "docker-tag",
+    "repository": "gruntwork/collectd-amazon-linux",
+    "tag": "latest",
+    "only": [
+      "collectd-docker-amazon-linux"
+    ]
+  },{
+    "type": "docker-tag",
+    "repository": "gruntwork/collectd-ubuntu-18",
+    "tag": "latest",
+    "only": [
+      "collectd-docker-ubuntu-18"
+    ]
+  },{
+    "type": "docker-tag",
+    "repository": "gruntwork/collectd-ubuntu",
+    "tag": "latest",
+    "only": [
+      "collectd-docker-ubuntu"
+    ]
+  },{
+    "type": "docker-tag",
+    "repository": "gruntwork/collectd-centos",
+    "tag": "latest",
+    "only": [
+      "collectd-docker-centos"
+    ]
+  }]
+}

@@ -1,0 +1,154 @@
+{
+  "min_packer_version": "0.12.0",
+  "variables": {
+    "aws_region": "us-east-1",
+    "instance_type": "t2.micro",
+    "github_auth_token": "{{env `GITHUB_OAUTH_TOKEN`}}",
+    "filebeat_version": "6.8.21",
+    "module_filebeat_version": "v0.0.1",
+    "module_filebeat_branch": "master",
+    "use_ssl": "false"
+  },
+  "builders": [{
+    "name": "filebeat-ami-amazon-linux",
+    "ami_name": "gruntwork-amazon-filebeat-ssl-example-{{uuid | clean_resource_name}}",
+    "ami_description": "An Amazon Linux 2 AMI that has Filebeat installed.",
+    "instance_type": "{{user `instance_type`}}",
+    "region": "{{user `aws_region`}}",
+    "type": "amazon-ebs",
+    "source_ami_filter": {
+      "filters": {
+        "virtualization-type": "hvm",
+        "architecture": "x86_64",
+        "name": "amzn2-ami-hvm-*-x86_64-gp2",
+        "block-device-mapping.volume-type": "gp2",
+        "root-device-type": "ebs"
+      },
+      "owners": ["amazon"],
+      "most_recent": true
+    },
+    "ssh_username": "ec2-user"
+  },{
+    "name": "filebeat-ami-ubuntu-20",
+    "ami_name": "gruntwork-ubuntu-20-filebeat-example-{{uuid | clean_resource_name}}",
+    "ami_description": "An Ubuntu 20.04 AMI that has Filebeat installed.",
+    "instance_type": "{{user `instance_type`}}",
+    "region": "{{user `aws_region`}}",
+    "type": "amazon-ebs",
+    "source_ami_filter": {
+      "filters": {
+        "virtualization-type": "hvm",
+        "architecture": "x86_64",
+        "name": "ubuntu/images/hvm-ssd/ubuntu-focal-20.04-amd64-server-*",
+        "block-device-mapping.volume-type": "gp2",
+        "root-device-type": "ebs"
+      },
+      "owners": ["099720109477"],
+      "most_recent": true
+    },
+    "ssh_username": "ubuntu"
+  },{
+    "name": "filebeat-ami-ubuntu-18",
+    "ami_name": "gruntwork-ubuntu-18-filebeat-example-{{uuid | clean_resource_name}}",
+    "ami_description": "An Ubuntu 18.04 AMI that has Filebeat installed.",
+    "instance_type": "{{user `instance_type`}}",
+    "region": "{{user `aws_region`}}",
+    "type": "amazon-ebs",
+    "source_ami_filter": {
+      "filters": {
+        "virtualization-type": "hvm",
+        "architecture": "x86_64",
+        "name": "ubuntu/images/hvm-ssd/ubuntu-bionic-18.04-amd64-server-*",
+        "block-device-mapping.volume-type": "gp2",
+        "root-device-type": "ebs"
+      },
+      "owners": ["099720109477"],
+      "most_recent": true
+    },
+    "ssh_username": "ubuntu"
+  },{
+    "name": "filebeat-ami-centos",
+    "ami_name": "gruntwork-centos-filebeat-example-{{uuid | clean_resource_name}}",
+    "ami_description": "A CentOS 7 AMI that has Filebeat installed.",
+    "instance_type": "{{user `instance_type`}}",
+    "region": "{{user `aws_region`}}",
+    "type": "amazon-ebs",
+    "source_ami_filter": {
+      "filters": {
+        "virtualization-type": "hvm",
+        "architecture": "x86_64",
+        "name": "*CentOS Linux 7 x86_64 HVM EBS*",
+        "root-device-type": "ebs"
+      },
+      "owners": ["679593333241"],
+      "most_recent": true
+    },
+    "ssh_username": "centos"
+  },{
+    "name": "filebeat-docker-amazon-linux",
+    "type": "docker",
+    "image": "gruntwork/amazon-linux-test:2017.12",
+    "commit": "true"
+  },{
+    "name": "filebeat-docker-ubuntu-18",
+    "type": "docker",
+    "image": "gruntwork/ubuntu-test:18.04",
+    "commit": "true"
+  },{
+    "name": "filebeat-docker-ubuntu",
+    "type": "docker",
+    "image": "gruntwork/ubuntu-test:16.04",
+    "commit": "true"
+  },{
+    "name": "filebeat-docker-centos",
+    "type": "docker",
+    "image": "gruntwork/centos-test:latest",
+    "commit": "true"
+  }],
+  "provisioners": [{
+    "type": "file",
+    "source": "{{template_dir}}/filebeat-install-steps.sh",
+    "destination": "/tmp/filebeat-install-steps.sh"
+  },{
+    "type": "file",
+    "source": "{{template_dir}}/config",
+    "destination": "/tmp"
+  },{
+    "type": "file",
+    "source": "{{template_dir}}/../ssl",
+    "destination": "/tmp"
+  },{
+    "type": "shell",
+    "inline": [
+      "curl -Ls https://raw.githubusercontent.com/gruntwork-io/gruntwork-installer/main/bootstrap-gruntwork-installer.sh | bash /dev/stdin --version 'v0.0.21'",
+      "gruntwork-install --module-name 'bash-commons' --repo 'https://github.com/gruntwork-io/bash-commons'  --tag 'v0.0.6'",
+      "/tmp/filebeat-install-steps.sh {{user `use_ssl`}} {{ user `filebeat_version` }} {{user `module_filebeat_version`}} {{user `module_filebeat_branch`}} '/tmp/config'",
+      "gruntwork-install --module-name 'run-filebeat' --repo 'https://github.com/gruntwork-io/terraform-aws-elk' --tag '{{user `module_filebeat_version`}}' --branch '{{user `module_filebeat_branch`}}'",
+      "gruntwork-install --module-name 'auto-discovery' --repo 'https://github.com/gruntwork-io/terraform-aws-elk' --tag '{{user `module_filebeat_version`}}' --branch '{{user `module_filebeat_branch`}}'"
+    ],
+    "environment_vars": [
+      "GITHUB_OAUTH_TOKEN={{user `github_auth_token`}}"
+    ]
+  }],
+  "post-processors": [{
+    "type": "docker-tag",
+    "repository": "gruntwork/filebeat-amazon-linux",
+    "tag": "latest",
+    "only": ["filebeat-docker-amazon-linux"]
+  },{
+    "type": "docker-tag",
+    "repository": "gruntwork/filebeat-ubuntu-18",
+    "tag": "latest",
+    "only": ["filebeat-docker-ubuntu-18"]
+  },{
+    "type": "docker-tag",
+    "repository": "gruntwork/filebeat-ubuntu",
+    "tag": "latest",
+    "only": ["filebeat-docker-ubuntu"]
+  },{
+    "type": "docker-tag",
+    "repository": "gruntwork/filebeat-centos",
+    "tag": "latest",
+    "only": ["filebeat-docker-centos"]
+  }]
+}

@@ -1,0 +1,151 @@
+{
+  "min_packer_version": "0.12.0",
+  "variables": {
+    "aws_region": "us-east-1",
+    "instance_type": "t2.micro",
+    "github_auth_token": "{{env `GITHUB_OAUTH_TOKEN`}}",
+    "module_elastalert_version": "0.1.1",
+    "elastalert_version": "0.1.35",
+    "module_branch": "master",
+    "use_ssl": "false"
+  },
+  "builders": [{
+    "name": "elastalert-ami-amazon-linux",
+    "ami_name": "gruntwork-amazon-elastalert-example-{{uuid | clean_resource_name}}",
+    "ami_description": "An Amazon Linux AMI that has ElastAlert installed.",
+    "instance_type": "{{user `instance_type`}}",
+    "region": "{{user `aws_region`}}",
+    "type": "amazon-ebs",
+    "source_ami_filter": {
+      "filters": {
+        "virtualization-type": "hvm",
+        "architecture": "x86_64",
+        "name": "amzn2-ami-hvm-*-x86_64-gp2",
+        "block-device-mapping.volume-type": "gp2",
+        "root-device-type": "ebs"
+      },
+      "owners": ["amazon"],
+      "most_recent": true
+    },
+    "ssh_username": "ec2-user"
+  },{
+    "name": "elastalert-ami-ubuntu-20",
+    "ami_name": "gruntwork-ubuntu-20-elastalert-example-{{uuid | clean_resource_name}}",
+    "ami_description": "An Ubuntu 20.04 AMI that has ElastAlert installed.",
+    "instance_type": "{{user `instance_type`}}",
+    "region": "{{user `aws_region`}}",
+    "type": "amazon-ebs",
+    "source_ami_filter": {
+      "filters": {
+        "virtualization-type": "hvm",
+        "architecture": "x86_64",
+        "name": "ubuntu/images/hvm-ssd/ubuntu-focal-20.04-amd64-server-*",
+        "block-device-mapping.volume-type": "gp2",
+        "root-device-type": "ebs"
+      },
+      "owners": ["099720109477"],
+      "most_recent": true
+    },
+    "ssh_username": "ubuntu"
+  },{
+    "name": "elastalert-ami-ubuntu-18",
+    "ami_name": "gruntwork-ubuntu-18-elastalert-example-{{uuid | clean_resource_name}}",
+    "ami_description": "An Ubuntu 18.04 AMI that has ElastAlert installed.",
+    "instance_type": "{{user `instance_type`}}",
+    "region": "{{user `aws_region`}}",
+    "type": "amazon-ebs",
+    "source_ami_filter": {
+      "filters": {
+        "virtualization-type": "hvm",
+        "architecture": "x86_64",
+        "name": "ubuntu/images/hvm-ssd/ubuntu-bionic-18.04-amd64-server-*",
+        "block-device-mapping.volume-type": "gp2",
+        "root-device-type": "ebs"
+      },
+      "owners": ["099720109477"],
+      "most_recent": true
+    },
+    "ssh_username": "ubuntu"
+  },{
+    "name": "elastalert-docker-amazon-linux",
+    "type": "docker",
+    "image": "gruntwork/amazon-linux-test:2017.12",
+    "commit": "true",
+    "run_command": ["-d", "-i", "-t", "{{.Image}}", "/sbin/init"],
+    "privileged": true,
+    "volumes": {
+      "/sys/fs/cgroup": "/sys/fs/cgroup"
+    }
+  },{
+    "name": "elastalert-docker-ubuntu-18",
+    "type": "docker",
+    "image": "gruntwork/ubuntu-test:18.04",
+    "commit": "true"
+  },{
+    "name": "elastalert-docker-ubuntu",
+    "type": "docker",
+    "image": "gruntwork/ubuntu-test:16.04",
+    "commit": "true"
+  }],
+  "provisioners": [{
+    "type": "shell",
+    "inline": [
+      "# The ubuntu ami image has sudo installed and requires us to use it",
+      "sleep 20",
+      "# Get around issue where automatic ubuntu updates prevent package installation.",
+      "# See https://groups.google.com/d/msg/packer-tool/NTvZP56DRqw/snr8PyoDBwAJ and https://github.com/boxcutter/ubuntu/issues/86",
+      "curl -Ls https://raw.githubusercontent.com/gruntwork-io/bash-commons/v0.1.3/modules/bash-commons/src/dynamic-ubuntu-wait.sh | bash",
+      "sudo DEBIAN_FRONTEND=noninteractive apt-get -y update && sudo DEBIAN_FRONTEND=noninteractive apt-get -y upgrade"
+    ],
+    "only": ["elastalert-ami-ubuntu-20", "elastalert-ami-ubuntu-18"]
+  },{
+    "type": "file",
+    "source": "{{template_dir}}/elastalert-install-steps.sh",
+    "destination": "/tmp/elastalert-install-steps.sh"
+  },{
+    "type": "file",
+    "source": "{{template_dir}}/elastalert-rules",
+    "destination": "/tmp"
+  },{
+    "type": "file",
+    "source": "{{template_dir}}/docker/elastalert-config",
+    "destination": "/tmp",
+    "only": ["elastalert-docker-ubuntu", "elastalert-docker-ubuntu-18", "elastalert-docker-amazon-linux"]
+  },{
+    "type": "file",
+    "source": "{{template_dir}}/aws/elastalert-config",
+    "destination": "/tmp",
+    "only": ["elastalert-ami-ubuntu-20", "elastalert-ami-ubuntu-18", "elastalert-ami-amazon-linux"]
+  },{
+    "type": "file",
+    "source": "{{template_dir}}/../ssl",
+    "destination": "/tmp"
+  },{
+    "type": "shell",
+    "inline": [
+      "curl -Ls https://raw.githubusercontent.com/gruntwork-io/gruntwork-installer/main/bootstrap-gruntwork-installer.sh | bash /dev/stdin --version 'v0.0.21'",
+      "gruntwork-install --module-name 'bash-commons' --repo 'https://github.com/gruntwork-io/bash-commons'  --tag 'v0.0.3'",
+      "/tmp/elastalert-install-steps.sh {{user `use_ssl`}} {{user `module_elastalert_version`}} {{user `module_branch`}} {{user `elastalert_version`}}",
+      "gruntwork-install --module-name 'run-elastalert' --repo 'https://github.com/gruntwork-io/terraform-aws-elk' --tag '{{user `module_elastalert_version`}}' --branch '{{user `module_branch`}}'"
+    ],
+    "environment_vars": [
+      "GITHUB_OAUTH_TOKEN={{user `github_auth_token`}}"
+    ]
+  }],
+  "post-processors": [{
+    "type": "docker-tag",
+    "repository": "gruntwork/elastalert-amazon-linux",
+    "tag": "latest",
+    "only": ["elastalert-docker-amazon-linux"]
+  },{
+    "type": "docker-tag",
+    "repository": "gruntwork/elastalert-ubuntu-18",
+    "tag": "latest",
+    "only": ["elastalert-docker-ubuntu-18"]
+  },{
+    "type": "docker-tag",
+    "repository": "gruntwork/elastalert-ubuntu",
+    "tag": "latest",
+    "only": ["elastalert-docker-ubuntu"]
+  }]
+}
